@@ -8,12 +8,6 @@ inductive type
 | «fun» (domain body : type)
 | abs (bound body : type)
 
--- inductive type : opt_param ℕ 0 → Type
--- | var {depth} (idx : fin depth) : type depth
--- | top {depth} : type depth
--- | «fun» {depth} (domain body : type depth) : type depth
--- | abs {depth} (bound : type depth) (body : type (depth + 1)) : type depth
-
 open type
 
 local infixr ` →ₛ `:50 := type.fun
@@ -25,28 +19,7 @@ def type.lift : ℕ → type → type
 | d (a →ₛ b) := type.lift d a →ₛ type.lift d b
 | d (∀0<:a, b) := ∀0<:type.lift d a, type.lift d b
 
--- def fin.add' {n} : Π k, fin n → fin (n+k)
--- | 0 n := n
--- | (k+1) n := (fin.add' k n).succ
--- 
--- def type.lift (k : ℕ) : Π {d}, type d → type (d+k)
--- | d (var x) := var $ x.add' k
--- | d top := top
--- | d (a →ₛ b) := type.lift a →ₛ type.lift b
--- | d (∀0<:a, b) := ∀0<:type.lift a, cast (by simp) (type.lift b)
-
--- instance nat_to_type : has_coe ℕ type := ⟨bound⟩
-
 def env := list type
--- inductive env : ℕ → Type
--- | nil : env 0
--- | push {d} : type d → env d → env (d+1)
-
--- def env.add (e : env) (a : type) : env :=
--- (a :: e).map type.lift
-
--- def env.add {d} (e : env d) (a : type d) : env (d+1) :=
--- (a :: e).map type.lift
 
 inductive sub : env → type → type → Prop
   notation e ` ⊢ `:40 a ` <: `:40 b:40 := sub e a b
@@ -56,82 +29,14 @@ inductive sub : env → type → type → Prop
 | «fun» {e a a' b b'} : e ⊢ a' <: a → e ⊢ b <: b' → e ⊢ a →ₛ b <: a' →ₛ b'
 | abs {e a a' b b'} : e ⊢ a' <: a → a'::e ⊢ b <: b' → e ⊢ ∀0<:a, b <: ∀0<:a', b'
 
---inductive sub : Π {d}, env d → type d → type d → Prop
---  notation e ` ⊢ `:40 a ` <: `:40 b:40 := sub e a b
---| var_refl {d} (e : env d) (x) : e ⊢ var x <: var x
-----| trans {d a b c} {e : env d} : e ⊢ a <: b → e ⊢ b <: c → e ⊢ a <: c
---| env {d a b} {e : env d} : e ⊢ a <: b → e.push a ⊢ var 0 <: b.lift 1
-----| lift {d a b c} {e : env d} : e ⊢ b <: c → e.push a ⊢ b.lift 1 <: c.lift 1
---| top {d} (e : env d) (a) : e ⊢ a <: top
---| «fun» {d} {e : env d} {a a' b b'} : e ⊢ a' <: a → e ⊢ b <: b' → e ⊢ a →ₛ b <: a' →ₛ b'
---| abs {d} {e : env d} {a a' b b'} : e ⊢ a' <: a → e.push a' ⊢ b <: b' → e ⊢ ∀0<:a, b <: ∀0<:a', b'
-
 notation e ` ⊢ `:40 a:41 ` <: `:40 b:40 := sub e a b
 notation a ` <: `:40 b:40 := sub [] a b
--- notation a ` <: `:40 b:40 := sub vector.nil a b
 
 lemma sub.refl : Π e a, e ⊢ a <: a
 | e (var x)    := sub.var_refl e x
 | e top        := sub.top e top
 | e (a →ₛ b)   := sub.fun (sub.refl e a) (sub.refl e b)
 | e (∀0<:a, b) := sub.abs (sub.refl e a) (sub.refl _ b)
---lemma sub.refl : Π {d} (e : env d) a, e ⊢ a <: a
---| d e (var x)    := sub.var_refl e x
---| d e top        := sub.top e top
---| d e (a →ₛ b)   := sub.fun (sub.refl e a) (sub.refl e b)
---| d e (∀0<:a, b) := sub.abs (sub.refl e a) (sub.refl _ b)
-
--- private def trans_env : ℕ → env → Prop
--- | _ [] := true
--- | d (a::e) := trans_env (d+1) e ∧ ∀ b, e ⊢ a <: b → a::e ⊢ var d <: b
--- 
--- private lemma trans_env_nth {d e a x} : trans_env d e → e.nth x = some a → e ⊢ var x <: a.lift x :=
--- begin
---   intros,
---   induction e,
---   case list.nil { apply nth}
--- end
--- 
--- lemma sub.trans {e a b c}
---   (he : trans_env 0 e) : e ⊢ a <: b → e ⊢ b <: c → e ⊢ a <: c :=
--- begin
---   intros h₁ h₂,
---   induction h₁,
---   case sub.var_refl { apply h₂ },
---   case sub.env {
---   }
--- end
-
---lemma type_succ {d} (t : type (d+1)) : t ≠ var 0 → ∃ t' : type d, t = t'.lift 1 :=
---begin
---  intro h, tactic.get_local `t >>= tactic.induction
---end
---
---lemma type_succ {d} (t : type (d+1)) : t = var 0 ∨ ∃ t' : type d, t = t'.lift 1 :=
-
---lemma sub.trans {e a b c} : e ⊢ a <: b → e ⊢ b <: c → e ⊢ a <: c :=
---begin
---  intros h₁ h₂,
---  induction b,
---  { generalize h : var idx = b, rw h at h₁, induction h₁,
---    { rw ←h, apply h₂ },
---    { apply sub.env a_2 }
---
---    }
---  induction h₁,
---  case sub.var_refl { apply h₂ },
---  case sub.env { apply sub.env ‹_› }
---end
-
---lemma sub.trans {d} {e : env d} {a b c} : e ⊢ a <: b → e ⊢ b <: c → e ⊢ a <: c :=
---begin
---  intros h₁ h₂,
---  -- induction e,
---  -- { },
---  induction h₁,
---  case sub.var_refl { apply h₂ },
---  case sub.env { apply sub.env }
---end
 
 section
 open lean
@@ -178,19 +83,6 @@ example : None <: True := by repeat {constructor}
 example : None <: False := by repeat {constructor}
 example : True <: Bool := by repeat {constructor}
 example : False <: Bool := by repeat {constructor}
-
---lemma sub.antisymm {e a b} : e ⊢ a <: b → e ⊢ b <: a → a = b :=
---begin
---  intros h₁ h₂,
---  induction h₁,
---  case sub.var_refl e x { show var x = var x, from rfl },
---  case sub.env e a b {{
---    cases h₂,
---    { refl },
---  }},
---end
---
---example : ¬ (True <: False) := by intro; cases a
 
 def prod (a b : type) := ⟦ₛ ∀ r, (a → b → r) → r ⟧
 infix ` ×ₛ `:45 := prod
