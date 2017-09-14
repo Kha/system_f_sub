@@ -1,23 +1,16 @@
 import data.list.basic
 
-lemma {u} if_pos' {c : Prop} {h : decidable c} (hc : c) {α : Sort u} {t e : α} : (ite c t e) = t :=
+/- Prelude -/
+
+attribute [simp] nat.succ_le_succ nat.zero_le
+
+
+lemma {u v} if_distrib {c : Prop} {h : decidable c} {α : Sort u} {t e : α}
+  {β : Sort v} (f : α → β) : f (ite c t e) = ite c (f t) (f e) :=
 match h with
 | (is_true  hc)  := rfl
-| (is_false hnc) := absurd hc hnc
-end
-
-lemma {u} if_neg' {c : Prop} {h : decidable c} (hnc : ¬c) {α : Sort u} {t e : α} : (ite c t e) = e :=
-match h with
-| (is_true hc)   := absurd hc hnc
 | (is_false hnc) := rfl
 end
-
-@[congr]
-lemma {u} if_simp_congr' {α : Sort u} {b c : Prop} {dec_b : decidable b} {x y u v : α}
-                    (h_c : b ↔ c) (h_t : x = u) (h_e : y = v) :
-        ite b x y = (@ite c (decidable_of_decidable_of_iff dec_b h_c) α u v) :=
-@if_ctx_simp_congr α b c dec_b x y u v h_c (λ h, h_t) (λ h, h_e)
-local attribute [-congr] if_simp_congr
 
 lemma nat.succ_lt_succ_iff (n m : ℕ) : n.succ < m.succ ↔ n < m :=
 ⟨nat.lt_of_succ_lt_succ, nat.succ_lt_succ⟩
@@ -25,6 +18,13 @@ lemma nat.succ_lt_succ_iff (n m : ℕ) : n.succ < m.succ ↔ n < m :=
 theorem nat.sub_lt_sub_right : Π {n m k : ℕ} (h₁ : n < m) (h₂ : k ≤ n), n - k < m - k
 | n     m     0     h₁ h₂ := h₁
 | (n+1) (m+1) (k+1) h₁ h₂ := by simp; apply nat.sub_lt_sub_right (nat.lt_of_succ_lt_succ h₁) (nat.le_of_succ_le_succ h₂)
+
+theorem nat.le_sub_one_of_lt {a b : ℕ} (h : a < b) : a ≤ b - 1 :=
+begin
+  cases b,
+  { simp [nat.not_lt_zero] at h; contradiction },
+  { simp [nat.le_of_succ_le_succ h] }
+end
 
 namespace list
 universe u
@@ -73,6 +73,8 @@ end list
 
 namespace system_f_sub
 
+/- Recursive types in F<: -/
+
 inductive type
 | var (idx : ℕ)
 | top
@@ -82,24 +84,52 @@ inductive type
 
 open type
 
-local infixr ` →ₛ `:50 := type.fun
-local notation `∀0<: ` t `, ` s := abs t s
+infixr ` →ₛ `:55 := type.fun
+notation `∀0<: ` t `, ` s := abs t s
+
+/- Parallel substitution -/
+
+def rename := ℕ → ℕ
+def rename.up (ξ : rename) : rename
+| 0     := 0
+| (k+1) := ξ k + 1
 
 @[simp]
-def type.lift (k : ℕ) : type → opt_param ℕ 0 → type
-| (var x)    d := if x ≥ d then var (x+k) else var x
-| top        d := top
-| (a →ₛ b)   d := a.lift d →ₛ b.lift d
-| (∀0<:a, b) d := ∀0<:a.lift d, b.lift (d+1)
-| (mu a)     d := mu (a.lift (d+1))
+def type.rename : rename → type → type
+| ξ (var x)    := var (ξ x)
+| ξ top        := top
+| ξ (a →ₛ b)   := a.rename ξ →ₛ b.rename ξ
+| ξ (∀0<:a, b) := ∀0<:a.rename ξ, b.rename ξ.up
+| ξ (mu a)     := mu (a.rename ξ.up)
+
+def subst := ℕ → type
+def subst.up (σ : subst) : subst
+| 0     := var 0
+| (k+1) := (σ k).rename (+1)
 
 @[simp]
-def type.instantiate : type → type → opt_param ℕ 0 → type
-| (var n)     r d := if n < d then var (n-1) else if n = d then r.lift d else var n
-| top         r d := top
-| (a →ₛ b)    r d := a.instantiate r d →ₛ b.instantiate r d
-| (∀0<: a, b) r d := ∀0<:a.instantiate r d, b.instantiate r (d+1)
-| (mu a)      r d := mu (a.instantiate r (d+1))
+def type.subst : subst → type → type
+| σ (var x)    := σ x
+| σ top        := top
+| σ (a →ₛ b)   := a.subst σ →ₛ b.subst σ
+| σ (∀0<:a, b) := ∀0<:a.subst σ, b.subst σ.up
+| σ (mu a)     := mu (a.subst σ.up)
+
+def subst.comp (σ' σ : subst) : subst := type.subst σ' ∘ σ
+
+infix ` ∘ₛ `:90 := subst.comp
+
+def lift_idx (k : ℕ) (d := 0) : rename :=
+λ i, if i ≥ d then i + k else i
+
+def type.lift (a : type) (k : ℕ) (d := 0) : type :=
+a.rename (lift_idx k d)
+
+def instantiate_idx (r : type) (d := 0) : subst :=
+λ i, if d < i then var (i-1) else if i = d then r.lift d else var i
+
+def type.instantiate (a b : type) (d := 0) : type :=
+a.subst (instantiate_idx b d)
 
 def type.expand (a : type) : type :=
 a.instantiate (mu a)
@@ -111,8 +141,9 @@ def type.free_range : type → ℕ
 | (∀0<: a, b) := max a.free_range (b.free_range - 1)
 | (mu a)      := a.free_range - 1
 
-@[reducible]
 def type.closed (t : type) := t.free_range = 0
+
+/- The subtyping relation -/
 
 @[reducible] def env := list type
 
@@ -127,6 +158,7 @@ inductive sub : env → type → type → Prop
 | top (e a) : e ⊢ a <: top
 | «fun» {e a a' b b'} : e ⊢ a' <: a → e ⊢ b <: b' → e ⊢ a →ₛ b <: a' →ₛ b'
 | abs {e a a' b b'} : e ⊢ a' <: a → a'::e ⊢ b <: b' → e ⊢ ∀0<:a, b <: ∀0<:a', b'
+-- violates the positivity restriction
 --| mu {e a a'} : (∀ b b', e ⊢ b <: b' → e ⊢ type.instantiate a b <: type.instantiate a' b') → e ⊢ mu a <: mu a'
 | mu_refl (e a) : e ⊢ mu a <: mu a
 | expₗ {e a a'} : e ⊢ type.expand a <: a' → e ⊢ mu a <: a'
@@ -141,6 +173,8 @@ lemma sub.refl : Π e a, e ⊢ a <: a
 | e (a →ₛ b)   := sub.fun (sub.refl e a) (sub.refl e b)
 | e (∀0<:a, b) := sub.abs (sub.refl e a) (sub.refl _ b)
 | e (mu a)     := sub.mu_refl e a
+
+/- A macro for translating Lean types into F<: types -/
 
 section
 open lean
@@ -158,7 +192,7 @@ private meta def aux : ℕ → ℕ → pexpr → parser pexpr
 | d d' (expr.var n) := let n := n - d' in pure ``(var %%(reflect n))
 | d d' (const n ls) := pure $ const n ls
 | d d' (app (const ``mu_helper _) (lam _ _ _ a)) := do a ← aux (d+1) d' a, pure ``(mu %%a)
-| d d' (expr.local_const n m bi t) := pure $ ``(type.lift  %%(reflect d) %%(expr.local_const n m bi t))
+| d d' (expr.local_const n m bi t) := pure $ ``(type.lift  %%(expr.local_const n m bi t) %%(reflect d))
 -- ``(∀ x <: %%a, %%b)
 | d d' (pi _ _ _ (pi _ _ (app (app (app (const `system_f_sub.sub []) _) (expr.var 0)) a) b)) :=
 do a ← aux (d+1) (d'+1) a, b ← aux (d+1) (d'+1) b, pure ``(∀0<:%%a, %%b)
@@ -181,6 +215,8 @@ meta def interpret_notation (_ : parse $ tk "⟦ₛ") (e : parse $ parser.pexpr 
 aux 0 0 e
 end
 
+/- Basic types -/
+
 -- def Bool := ∀0<:top, var 0 →ₛ var 0 →ₛ var 0
 def Bool := ⟦ₛ ∀ a, a → a → a ⟧
 def True := ⟦ₛ ∀ a, a → top → a ⟧
@@ -195,19 +231,80 @@ example : False <: Bool := by repeat {constructor}
 def prod (a b : type) := ⟦ₛ ∀ r, (a → b → r) → r ⟧
 infix ` ×ₛ `:45 := prod
 
-attribute [simp] nat.succ_le_succ
+def tuple : list type → type
+| []      := top
+| (a::as) := a ×ₛ tuple as
+
+structure field :=
+(idx : ℕ)
+(type : type)
+
+def record_list (fields : list field) : list type :=
+let max_idx := (fields.map field.idx).foldr max 0 in
+(list.range (max_idx+1)).map (λ i, (field.type <$> fields.find (λ f, f.idx = i)).get_or_else top)
+
+def record (fields : list field) : type :=
+tuple (record_list fields ++ [top])
+
+/- Finally, some proofs -/
+
+lemma rename_up_id : rename.up id = id :=
+begin
+  apply funext, intro i,
+  cases i; simp [rename.up]
+end
+
+lemma rename_up_comp_rename_up (ξ ξ' : rename) : ξ'.up ∘ ξ.up = rename.up (ξ' ∘ ξ) :=
+begin
+  apply funext, intro i,
+  cases i; simp [function.comp, rename.up]
+end
+
+@[simp]
+lemma rename_rename (a : type) (ξ ξ') : (a.rename ξ).rename ξ' = a.rename (ξ' ∘ ξ) :=
+by induction a generalizing ξ ξ'; simp [*,rename_up_comp_rename_up]
+
+lemma subst_up_comp_rename_up (ξ : rename) (σ : subst) : σ.up ∘ ξ.up = subst.up (σ ∘ ξ) :=
+begin
+  apply funext, intro i,
+  cases i; simp [function.comp, rename.up, subst.up]
+end
+
+@[simp]
+lemma rename_subst (a : type) (ξ σ) : (a.rename ξ).subst σ = a.subst (σ ∘ ξ) :=
+by induction a generalizing ξ σ; simp [*,subst_up_comp_rename_up]
+
+lemma rename_up_comp_subst_up (ξ : rename) (σ : subst) : type.rename ξ.up ∘ σ.up = subst.up (type.rename ξ ∘ σ) :=
+begin
+  apply funext, intro i,
+  cases i with i; simp [function.comp, rename.up, subst.up]
+end
+
+@[simp]
+lemma subst_rename (a : type) (ξ σ) : (a.subst σ).rename ξ = a.subst (type.rename ξ ∘ σ) :=
+by induction a generalizing ξ σ; simp [*,rename_up_comp_subst_up]
+
+lemma subst_up_comp_subst_up (σ σ' : subst) : σ'.up ∘ₛ σ.up = (σ' ∘ₛ σ).up :=
+begin
+  apply funext, intro i,
+  cases i with i; simp [subst.comp, function.comp, subst.up]
+end
+
+@[simp]
+lemma subst_subst (a : type) (σ σ') : (a.subst σ).subst σ' = a.subst (σ' ∘ₛ σ) :=
+begin
+  induction a generalizing σ σ'; simp [*,subst_up_comp_subst_up],
+  case var { simp [subst.comp, function.comp] }
+end
 
 lemma lift_lift {k k' d d'} (a : type) : d ≤ d' → d' ≤ k + d → (a.lift k d).lift k' d' = a.lift (k + k') d :=
 begin
-  intros, induction a generalizing d d',
-  all_goals { simp [*,type.lift] },
-  case type.var {
-    by_cases idx ≥ d,
-    { simp [ge, h, type.lift, le_trans ‹d' ≤ k + d› (add_le_add_left h _)] },
-    { have : ¬d' ≤ idx, from λ hcontr, h (le_trans ‹d ≤ d'› hcontr),
-      simp [ge, h, type.lift, this] }
-  },
-  all_goals { simp [nat.add_one, *] }
+  intros, simp [type.lift,rename_rename,function.comp],
+  apply congr_fun, apply congr_arg, apply funext, intro i,
+  by_cases i ≥ d,
+  { simp [ge, h, type.lift, lift_idx, le_trans ‹d' ≤ k + d› (add_le_add_left h _)] },
+  { have : ¬d' ≤ i, from λ hcontr, h (le_trans ‹d ≤ d'› hcontr),
+    simp [ge, h, type.lift, lift_idx, this] }
 end
 
 @[simp]
@@ -216,72 +313,64 @@ lift_lift _ dec_trivial dec_trivial
 
 lemma lift_lift2 (k k' d d') (a : type) : k + d ≤ d' → (a.lift k d).lift k' d' = (a.lift k' (d' - k)).lift k d :=
 begin
-  intro h, induction a generalizing d d',
-  all_goals {
-    have : k ≤ d', from le_trans (nat.le_add_right _ _) ‹k + d ≤ d'›,
-    simp [*,type.lift] },
-  case type.var {
-    by_cases idx ≥ d,
-    { by_cases d' ≤ k + idx with h',
-      { have : d' - k ≤ k + idx - k, from nat.sub_le_sub_right h' k,
-        simp [nat.add_sub_cancel_left] at this,
-        simp [ge, h, type.lift, h', this, le_add_of_nonneg_of_le (nat.zero_le _) h] },
-      { have : ¬ d' - k ≤ idx, begin
-          assume hcontr, apply h',
-          have : d' - k + k ≤ idx + k, from nat.add_le_add_right hcontr k,
-          simp [nat.sub_add_cancel ‹k ≤ d'›] at this,
-          simp [this],
-        end,
-        simp [ge, h, type.lift, h', this] }
-    },
-    { simp [ge, h],
-      have : ¬d' - k ≤ idx, begin
-        have : k + idx < k + d, from add_lt_add_left (lt_of_not_ge h) _,
-        have : idx + k < k + d, by simp [this],
-        have : d' > idx + k, from lt_of_lt_of_le this ‹k + d ≤ d'›,
-        have : d' - k > idx + k - k, from nat.sub_lt_sub_right this (nat.le_add_left _ _),
-        simp only [nat.add_sub_cancel] at this,
-        exact not_le_of_gt this,
+  intros, simp [type.lift,rename_rename,function.comp],
+  apply congr_fun, apply congr_arg, apply funext, intro i,
+  have : k ≤ d', from le_trans (nat.le_add_right _ _) ‹k + d ≤ d'›,
+  by_cases i ≥ d,
+  { by_cases d' ≤ k + i with h',
+    { have : d' - k ≤ k + i - k, from nat.sub_le_sub_right h' k,
+      simp [nat.add_sub_cancel_left] at this,
+      simp [ge, h, type.lift, lift_idx, h', this, le_add_of_nonneg_of_le (nat.zero_le _) h] },
+    { have : ¬ d' - k ≤ i, begin
+        assume hcontr, apply h',
+        have : d' - k + k ≤ i + k, from nat.add_le_add_right hcontr k,
+        simp [nat.sub_add_cancel ‹k ≤ d'›] at this,
+        simp [this],
       end,
-      have : d ≤ d', from le_trans (nat.le_add_left _ _) ‹k + d ≤ d'›,
-      have : ¬d' ≤ idx, from not_le_of_gt (lt_of_lt_of_le (lt_of_not_ge h) this),
-      simp [*, if_neg' h, type.lift, if_neg' this] }
+      simp [ge, h, type.lift, lift_idx, h', this] }
   },
-  case type.abs {
-    rw [ih_2, add_comm, nat.add_sub_assoc ‹k ≤ d'›],
-    { simp [nat.add_one, *] } },
-  case type.mu {
-    rw [ih_1, add_comm, nat.add_sub_assoc ‹k ≤ d'›],
-    { simp [nat.add_one, *] } }
+  { simp [ge, lift_idx, h],
+    have : ¬d' - k ≤ i, begin
+      have : k + i < k + d, from add_lt_add_left (lt_of_not_ge h) _,
+      have : i + k < k + d, by simp [this],
+      have : d' > i + k, from lt_of_lt_of_le this ‹k + d ≤ d'›,
+      have : d' - k > i + k - k, from nat.sub_lt_sub_right this (nat.le_add_left _ _),
+      simp only [nat.add_sub_cancel] at this,
+      exact not_le_of_gt this,
+    end,
+    have : d ≤ d', from le_trans (nat.le_add_left _ _) ‹k + d ≤ d'›,
+    have : ¬d' ≤ i, from not_le_of_gt (lt_of_lt_of_le (lt_of_not_ge h) this),
+    simp [*, h, type.lift, this] }
 end
 
 lemma nat.succ_le_iff_lt (n m : ℕ) : n.succ ≤ m ↔ n < m := ⟨nat.succ_le_of_lt, nat.lt_of_succ_le⟩
 
 @[simp]
-lemma instantiate_lift (a b : type) (k d d') : d' < d → (a.lift k (d + 1)).instantiate (b.lift k d) d' = (a.instantiate b d').lift k d :=
+lemma expand_lift (k d) (a : type) : (a.lift k (d+1)).expand = a.expand.lift k d :=
 begin
-  intro, induction a generalizing d d',
-  all_goals { simp },
-  case type.var {
-    simp [nat.add_one, ge, nat.succ_le_iff_lt],
-    by_cases d < idx,
-    { have : ¬ k + idx < d', from sorry,
-      have : k + idx ≠ d', from sorry,
-      have : d' < idx, from lt_trans ‹d' < d› ‹d < idx›,
-      simp [*, ge, le_of_lt h, not_lt_of_gt this, (ne_of_lt this).symm] },
-    { simp [h],
-      by_cases idx < d' with h',
-      { have : ¬ idx - 1 ≥ d, from sorry,
-        simp * },
-      { by_cases idx = d',
-        { simp [*] } }
-    }
+  intros, simp [type.expand,type.instantiate,type.lift,instantiate_idx,rename_rename,function.comp],
+  -- HACK
+  apply @congr_fun _ _ (type.subst _) (type.subst _),
+  apply congr_arg, apply funext, intro i,
+  simp [nat.not_lt_zero,ge,lift_idx,nat.succ_le_iff_lt],
+  by_cases d < i,
+  { have : 0 < i, from lt_of_le_of_lt (nat.zero_le _) ‹d < i›,
+    have : 0 < k + i, from lt_of_lt_of_le this (nat.le_add_left _ _),
+    simp [*, le_of_lt h, nat.add_sub_assoc, nat.succ_le_iff_lt, nat.le_sub_one_of_lt] },
+  { simp [*],
+    cases i with i,
+    { simp [rename_up_comp_rename_up, nat.not_lt_zero],
+      apply congr_arg, apply congr_fun, apply congr_arg, apply funext, intro j,
+      cases j, --by_cases d ≤ j,
+      { simp [rename.up,*] },
+      { simp [rename.up,*, function.comp, if_distrib nat.succ, nat.add_one, nat.add_succ,
+          nat.lt_succ_iff_le],
+        erw rename_up_id, apply if_congr; simp }
+    },
+    { have : ¬ d ≤ i, from h ∘ nat.lt_succ_of_le,
+      simp [nat.zero_lt_succ,*] }
   }
 end
-
-@[simp]
-lemma expand_lift (k d) (a : type) : (a.lift k (d+1)).expand = a.expand.lift k d :=
-by simp [type.expand]; rw [←type.lift, instantiate_lift]
 
 @[simp]
 lemma env.length_lift (e : env) (k d) : (e.lift k d).length = e.length :=
@@ -309,23 +398,69 @@ end
 lemma lift_zero (a : type) : a.lift 0 = a :=
 by induction a; simp [*, type.lift]-/
 
+@[simp]
+lemma up_lift_idx (k d) : (lift_idx k d).up = lift_idx k (d+1) :=
+begin
+  apply funext, intro i,
+  simp [lift_idx],
+  cases i,
+  { have : d + 1 > 0, from nat.zero_lt_succ _,
+    simp [rename.up, ge, not_le_of_gt this] },
+  { simp [rename.up, ge, nat.succ_le_succ_iff],
+    rw if_distrib (has_add.add 1),
+    simp [nat.add_one],
+    apply if_congr; refl }
+end
+
+@[simp]
+lemma up_instantiate_idx (a d) : (instantiate_idx a d).up = instantiate_idx a (d+1) :=
+begin
+  apply funext, intro i,
+  simp [instantiate_idx],
+  cases i with i,
+  { have : d + 1 > 0, from nat.zero_lt_succ _,
+    simp [subst.up, not_lt_of_ge (nat.zero_le _), ne_of_lt this] },
+  { simp [subst.up, ge, nat.succ_lt_succ_iff, nat.add_one],
+    by_cases d < i,
+    { have : 0 < i, from lt_of_le_of_lt (nat.zero_le _) h,
+      simp [*, (nat.succ_sub this).symm] },
+    { simp *,
+      by_cases i = d,
+      { simp [*,type.lift,lift_idx,function.comp,nat.zero_le,ge,nat.add_succ] },
+      { have : i.succ ≠ d.succ, from h ∘ nat.succ.inj,
+        simp [*] }
+    }
+  }
+end
+
+section
+variables (k d : ℕ)
+@[simp] def type.lift_idx (x : ℕ) : (var x).lift k d = var (lift_idx k d x) := rfl
+@[simp] def type.lift_top : top.lift k d = top := rfl
+@[simp] def type.lift_app (a b) : (a →ₛ b).lift k d = a.lift k d →ₛ b.lift k d := rfl
+@[simp] def type.lift_abs (a b) : (∀0<:a, b).lift k d = ∀0<:a.lift k d, b.lift k (d+1) := by simp [type.lift]
+@[simp] def type.lift_mu (a) : (mu a).lift k d = mu (a.lift k (d+1)) := by simp [type.lift]
+
+variables (r : type)
+@[simp] def type.instantiate_var (x : ℕ) : (var x).instantiate r d = if d < x then var (x-1) else if x = d then r.lift d else var x := rfl
+@[simp] def type.instantiate_top : top.instantiate r d = top := rfl
+@[simp] def type.instantiate_app (a b) : (a →ₛ b).instantiate r d = a.instantiate r d →ₛ b.instantiate r d := rfl
+@[simp] def type.instantiate_abs (a b) : (∀0<: a, b).instantiate r d = ∀0<:a.instantiate r d, b.instantiate r (d+1) := by simp [type.instantiate]
+@[simp] def type.instantiate_mu (a) : (mu a).instantiate r d = mu (a.instantiate r (d+1)) := by simp [type.instantiate]
+end
+
 lemma sub_insert {e₁ e₂ : env} {a b c} : e₁ ++ e₂ ⊢ a <: b → e₁.lift 1 ++ c::e₂ ⊢ a.lift 1 e₁.length <: b.lift 1 e₁.length :=
 begin
   generalize he' : e₁ ++ e₂ = e',
   intro h, induction h generalizing c e₁,
-  all_goals { simp [type.lift, -add_comm], try {constructor; done} },
-  case sub.var_refl {
-    by_cases x ≥ e₁.length,
-    { simp [if_pos h], apply sub.var_refl },
-    { simp [if_neg h], apply sub.var_refl }
-  },
+  all_goals { simp [lift_idx, -add_comm], try {constructor; done} },
   case sub.env e' x a b h₁ h₂ ih {
     subst e',
     by_cases x ≥ e₁.length,
     { simp [if_pos h], apply sub.env,
       { have : ¬ (x + 1 < e₁.length), from
           λ hcontr, not_lt_of_ge h (nat.lt_of_succ_lt hcontr),
-        simp [list.nth_append, if_neg' this, nat.sub_add_comm h, -add_comm, list.nth],
+        simp [list.nth_append, this, nat.sub_add_comm h, -add_comm, list.nth],
         simp [list.nth_append, if_neg (not_lt_of_ge h)] at h₁,
         apply h₁ },
       { have ih := ih rfl,
@@ -333,7 +468,7 @@ begin
         apply ih }
     },
     { simp [if_neg h], apply sub.env,
-      { simp [list.nth_append, if_pos' (lt_of_not_ge h)] at ⊢ h₁,
+      { simp [list.nth_append, lt_of_not_ge h] at ⊢ h₁,
         -- HACK
         show _ = some (a.lift 1 (e₁.length - 1 - x)),
         simp [h₁], refl },
@@ -374,10 +509,6 @@ begin
   apply @sub_insert []; assumption
 end
 
-def tuple : list type → type
-| []      := top
-| (a::as) := a ×ₛ tuple as
-
 lemma {u} list.elem_zip_cons_of_elem_zip {α β : Type u} {a : α} {b : β} {p as bs} : p ∈ list.zip as bs → p ∈ list.zip (a::as) (b::bs) :=
 or.inr
 
@@ -394,17 +525,73 @@ begin
   }
 end
 
-section records
-structure field :=
-(idx : ℕ)
-(type : type)
+@[simp]
+lemma lift_tuple (as k d) : (tuple as).lift k d = tuple (as.map (λ a, a.lift k d)) :=
+begin
+  induction as generalizing d,
+  { refl },
+  { simp [tuple, prod, lift_idx, lift_lift2, *, ge, not_le_of_gt (nat.zero_lt_succ _)] }
+end
 
-def record_list (fields : list field) : list type :=
-let max_idx := (fields.map field.idx).foldr max 0 in
-(list.range (max_idx+1)).map (λ i, (field.type <$> fields.find (λ f, f.idx = i)).get_or_else top)
+@[simp]
+lemma instantiate_idx_lift_idx (i b d) : instantiate_idx b (d + 1) (lift_idx 1 0 i) = type.rename (lift_idx 1) (instantiate_idx b d i) :=
+begin
+  simp [instantiate_idx, lift_idx, ge, nat.zero_le, nat.add_one, nat.succ_lt_succ_iff],
+  by_cases d < i,
+  { have : 0 < i, from lt_of_le_of_lt (nat.zero_le _) ‹d < i›,
+    simp [*, has_sub.sub, nat.sub, nat.succ_pred_eq_of_pos this] },
+  { simp [*],
+    by_cases i = d,
+    { simp [*, type.lift, lift_idx, function.comp, ge, nat.zero_le, nat.add_succ] },
+    { simp [*, show i.succ ≠ d.succ, from h ∘ nat.succ.inj] }
+  }
+end
 
-def record (fields : list field) : type :=
-tuple (record_list fields ++ [top])
+@[simp]
+lemma instantiate_tuple (as b d) : (tuple as).instantiate b d = tuple (as.map (λ a, a.instantiate b d)) :=
+begin
+  generalize h : as.length = l,
+  induction l generalizing as b d,
+  { simp [list.eq_nil_of_length_eq_zero h], refl },
+  { cases as,
+    { contradiction },
+    { rw list.length at h, injection h with h,
+      simp [tuple, prod, nat.not_lt_zero],
+      rw ih_1 _ b (d+1),
+      { have : 0 ≠ d + 1, by intro hcontr; injection hcontr,
+        simp [*, type.instantiate, type.lift, function.comp, list.length_map] },
+      { simp [*, list.length_map] }
+    }
+  }
+end
+
+lemma instantiate_record (b fs) : (record fs).instantiate b = record (fs.map (λ ⟨i, a⟩, ⟨i, a.instantiate b⟩)) :=
+begin
+  simp [record, record_list],
+  apply congr_arg,
+  apply congr_fun,
+  { apply congr_arg,
+    apply congr,
+    { apply congr_arg,
+      apply funext, intro i,
+      induction fs,
+      { refl },
+      { simp [list.find], cases a,
+        simp,
+        by_cases idx = i,
+        { simp [function.comp, h, option.get_or_else, has_map.map, option.map, option.bind] },
+        { simp [function.comp, h], apply ih_1 },
+      }
+    },
+    { apply congr_arg,
+      apply congr_arg,
+      apply congr_fun, simp,
+      apply congr_fun,
+      apply congr_arg,
+      apply funext, intro a, cases a with idx ty,
+      simp }
+  }
+end
 
 lemma record.sub {e} {fs fs' : list field} :
   (record_list fs).length ≥ (record_list fs').length →
@@ -433,87 +620,11 @@ begin
   }
 end
 
-end records
-
-section
-parameter int : type
-
-def a := 0
-def b := 1
-def c := 2
-
-def foo := record [⟨a, int⟩, ⟨b, top⟩]
-def bar := record [⟨a, int⟩, ⟨b, int⟩, ⟨c, int⟩]
-
-open tactic
---set_option trace.type_context.is_def_eq true
---set_option trace.simplify true
-example : bar <: foo :=
-record.sub dec_trivial (λ ⟨a, b⟩ h, begin
-  conv at h {
-    find (list.zip _ _) {whnf,reflexivity},
-    simp,
-    find (option.get_or_else _ _) {whnf},
-    find (option.get_or_else _ _) {whnf},
-    find (option.get_or_else _ _) {whnf},
-    find (option.get_or_else _ _) {whnf},
-  },
-  cases h with h h; simp [h],
-  { apply sub.refl },
-  { apply sub.top },
-end)
-
-end
-
-@[simp]
-lemma lift_tuple (as k) : (tuple as).lift k = tuple (as.map (λ a, a.lift k 1)) :=
-begin
-  induction as,
-  { refl },
-  { simp [tuple, prod] }
-end
-
-@[simp]
-lemma instantiate_tuple (as b) : (tuple as).instantiate b = tuple (as.map (λ a, a.instantiate b)) :=
-begin
-  induction as,
-  { refl },
-  { simp [tuple, prod, type.instantiate, ih_1] }
-end
-
-lemma instantiate_record (b fs) : (record fs).instantiate b = record (fs.map (λ ⟨i, a⟩, ⟨i, a.instantiate b⟩)) :=
-begin
-  simp [record, record_list],
-  apply congr_arg,
-  apply congr_fun,
-  { apply congr_arg,
-    apply congr,
-    { apply congr_arg,
-      apply funext, intro i,
-      induction fs,
-      { refl },
-      { simp [list.find], cases a,
-        simp,
-        by_cases idx = i,
-        { simp [function.comp, h, option.get_or_else, has_map.map, option_map, option_bind] },
-        { simp [function.comp, h], apply ih_1 },
-      }
-    },
-    { apply congr_arg,
-      apply congr_arg,
-      apply congr_fun, simp,
-      apply congr_fun,
-      apply congr_arg,
-      apply funext, intro a, cases a with idx ty,
-      simp }
-  }
-end
-
 lemma lift_free_range {t : type} (k m) : t.free_range ≤ m → t.lift k m = t :=
 begin
   induction t generalizing m,
-  all_goals { simp [type.free_range, type.lift] },
-  { intro h,  simp [if_neg' (not_le_of_gt (nat.lt_of_succ_le h))] },
+  all_goals { simp [type.free_range] },
+  { intro h,  simp [lift_idx, ge, not_le_of_gt (nat.lt_of_succ_le h)] },
   { intro h,
     have := ih_1 m (le_trans (le_max_left _ _) h),
     rw [this],
@@ -558,8 +669,10 @@ end
 lemma instantiate_free_range {t t' : type} {d} : t.free_range ≤ d → t.instantiate t' d = t :=
 begin
   induction t generalizing d,
-  all_goals { simp [type.instantiate, type.free_range] },
-  { intro h, simp [if_neg (ne_of_lt (nat.lt_of_succ_le h))] },
+  all_goals { simp [type.free_range] },
+  { intro h,
+    have : idx < d, from nat.lt_of_succ_le h,
+    simp [lift_idx, instantiate_idx, ne_of_lt this, not_lt_of_gt this] },
   { intro h, rw[ih_1 (le_trans (left_le_of_max_le h) (le_refl _)),
                 ih_2 (le_trans (right_le_of_max_le h) (le_refl _))] },
   { intro h, rw[ih_1 (le_trans (left_le_of_max_le h) (le_refl _)),
@@ -574,7 +687,36 @@ begin
   simp [type.closed] at h, simp [h]
 end
 
+section
+parameter int : type
+
+def labels.a := 0
+def labels.b := 1
+def labels.c := 2
+
+def foo := ⟦ₛ { a := int, b := top } ⟧
+def bar := ⟦ₛ { a := int, b := int, c := int } ⟧
+
+example : bar <: foo :=
+record.sub dec_trivial (λ ⟨a, b⟩ h, begin
+  conv at h {
+    find (list.zip _ _) {whnf},
+    simp,
+    find (option.get_or_else _ _) {whnf},
+    find (option.get_or_else _ _) {whnf},
+    find (option.get_or_else _ _) {whnf},
+    find (option.get_or_else _ _) {whnf},
+  },
+  cases h with h h; simp [h],
+  { apply sub.refl },
+  { apply sub.top },
+end)
+
+end
+
 end system_f_sub
+
+/- Unused experiments -/
 
 section
 open lean
@@ -624,12 +766,3 @@ do t ← target, delta cs t cfg >>= unsafe_change
 
 run_cmd add_interactive [`dunfold_productive] `conv.interactive
 end
-
-example : ⟦ₛ μ a, top → a ⟧ = ⟦ₛ top → μ a, top → a ⟧ :=
-begin
-  apply quotient.sound,
-  apply relμ.expand,
-  apply relμ.refl
-end
-
-end system_f_sub_mu
