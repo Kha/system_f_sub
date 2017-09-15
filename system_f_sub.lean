@@ -3,6 +3,7 @@ import data.list.basic
 /- Prelude -/
 
 attribute [simp] nat.succ_le_succ nat.zero_le
+attribute [reducible] id
 
 
 lemma {u v} if_distrib {c : Prop} {h : decidable c} {α : Sort u} {t e : α}
@@ -187,32 +188,52 @@ open expr (app pi const lam)
 reserve notation `⟦ₛ`:1000
 def mu_helper := 0
 notation `μ ` binder `, ` a:scoped := mu_helper a
+def ctx_helper := 0
+notation `bctx ` binder <: a:50 `⊢` b:scoped := ctx_helper a b
 
-private meta def aux : ℕ → ℕ → pexpr → parser pexpr
+private meta def parse_type : ℕ → ℕ → pexpr → parser pexpr
 | d d' (expr.var n) := let n := n - d' in pure ``(var %%(reflect n))
 | d d' (const n ls) := pure $ const n ls
-| d d' (app (const ``mu_helper _) (lam _ _ _ a)) := do a ← aux (d+1) d' a, pure ``(mu %%a)
+| d d' (app (const ``mu_helper _) (lam _ _ _ a)) := do a ← parse_type (d+1) d' a, pure ``(mu %%a)
 | d d' (expr.local_const n m bi t) := pure $ ``(type.lift  %%(expr.local_const n m bi t) %%(reflect d))
 -- ``(∀ x <: %%a, %%b)
 | d d' (pi _ _ _ (pi _ _ (app (app (app (const `system_f_sub.sub []) _) (expr.var 0)) a) b)) :=
-do a ← aux (d+1) (d'+1) a, b ← aux (d+1) (d'+1) b, pure ``(∀0<:%%a, %%b)
+do a ← parse_type (d+1) (d'+1) a, b ← parse_type (d+1) (d'+1) b, pure ``(∀0<:%%a, %%b)
 | d d' (expr.pi _ _ dom b) :=
 if (@unchecked_cast _ expr b).has_var_idx 0 then
-     do b ← aux (d+1) d' b, pure ``(∀0<:top, %%b)
+     do b ← parse_type (d+1) d' b, pure ``(∀0<:top, %%b)
    else
-     do dom ← aux d d' dom, b ← aux d (d'+1) b, pure ``(%%dom →ₛ %%b)
+     do dom ← parse_type d d' dom, b ← parse_type d (d'+1) b, pure ``(%%dom →ₛ %%b)
 | d d' e := match e.get_structure_instance_info with
   | some info :=
     do fields ← (info.field_names.zip info.field_values).mmap (λ ⟨n, v⟩,
-      do v ← aux d d' v,
+      do v ← parse_type d d' v,
          pure ``(⟨%%(const (`system_f_sub.labels ++ n) [] : pexpr), %%v⟩)),
     pure (app (const `system_f_sub.record []) (fields.foldr (λ e f, ``(%%e::%%f)) ``([])))
   | _ := tactic.fail format!"unsupported sub-expression {e.to_raw_fmt}"
   end
 
+private meta def parse_ctx : list pexpr → pexpr → parser pexpr
+| ctx (app (app (const ``ctx_helper _) a) (lam _ _ _ b)) :=
+do a ← parse_type ctx.length 0 a,
+   let ctx := a::ctx,
+   parse_ctx ctx b
+| ctx (app (app (app (const ``sub _) _) a) b) :=
+do a ← parse_type ctx.length 0 a,
+   b ← parse_type ctx.length 0 b,
+   pure ``(sub %%(ctx.foldl (λ ctx a, ``(%%a :: %%ctx)) ``([])) %%a %%b)
+| _ e := parse_type 0 0 e
+
+private meta def erase_all_annotations : expr → expr :=
+λ e, expr.replace e (λ e _, match e.is_annotation with
+| some (_, e') := some (erase_all_annotations e')
+| _ := none
+end)
+
 @[user_notation]
 meta def interpret_notation (_ : parse $ tk "⟦ₛ") (e : parse $ parser.pexpr <* tk "⟧") : parser pexpr :=
-aux 0 0 e
+let e := erase_all_annotations (unchecked_cast e) in
+parse_ctx [] (unchecked_cast e)
 end
 
 /- Basic types -/
@@ -364,8 +385,8 @@ begin
       cases j, --by_cases d ≤ j,
       { simp [rename.up,*] },
       { simp [rename.up,*, function.comp, if_distrib nat.succ, nat.add_one, nat.add_succ,
-          nat.lt_succ_iff_le],
-        erw rename_up_id, apply if_congr; simp }
+          nat.lt_succ_iff_le, rename_up_id],
+        apply if_congr; simp }
     },
     { have : ¬ d ≤ i, from h ∘ nat.lt_succ_of_le,
       simp [nat.zero_lt_succ,*] }
@@ -394,9 +415,9 @@ begin
   }
 end
 
-/-@[simp]
+@[simp]
 lemma lift_zero (a : type) : a.lift 0 = a :=
-by induction a; simp [*, type.lift]-/
+by induction a; simp [*, type.lift, lift_idx, rename_up_id] at *
 
 @[simp]
 lemma up_lift_idx (k d) : (lift_idx k d).up = lift_idx k (d+1) :=
@@ -687,31 +708,88 @@ begin
   simp [type.closed] at h, simp [h]
 end
 
+/- A tactic for reducing record relations to field-wise relations -/
+
 section
-parameter int : type
+private meta def go :=
+`[simp [record_list, list.range, list.range_core, list.find,
+        option.get_or_else, list.zip, list.zip_with, max_eq_left, max_eq_right]
+       at h {fail_if_unchanged:=ff},
+  do {
+    h ← tactic.get_local `h >>= tactic.infer_type,
+    match h with
+    | `(_ ∨ _) := `[
+        cases h with h h,
+        tactic.swap,
+        go]
+    | _ := tactic.skip
+    end
+  }]
 
-def labels.a := 0
-def labels.b := 1
-def labels.c := 2
+meta def record.fieldwise_eq : tactic unit :=
+`[apply record.sub,
+  { exact dec_trivial },
+  intros p h,
+  cases p with a b,
+  go,
+  all_goals { simp [h] }]
 
-def foo := ⟦ₛ { a := int, b := top } ⟧
-def bar := ⟦ₛ { a := int, b := int, c := int } ⟧
+run_cmd add_interactive [``record.fieldwise_eq]
+end
+
+section
+
+attribute [reducible] lift_t coe_to_lift coe_t coe_option
+
+@[simp] def labels.a := 0
+@[simp] def labels.b := 1
+@[simp] def labels.c := 2
+
+def foo := ⟦ₛ { a := Bool, b := top } ⟧
+def bar := ⟦ₛ { a := Bool, b := Bool, c := Bool } ⟧
 
 example : bar <: foo :=
 record.sub dec_trivial (λ ⟨a, b⟩ h, begin
   conv at h {
-    find (list.zip _ _) {whnf},
+    change (a, b) = (Bool, Bool) ∨ _,
     simp,
-    find (option.get_or_else _ _) {whnf},
-    find (option.get_or_else _ _) {whnf},
-    find (option.get_or_else _ _) {whnf},
-    find (option.get_or_else _ _) {whnf},
   },
   cases h with h h; simp [h],
   { apply sub.refl },
   { apply sub.top },
 end)
 
+def A := ⟦ₛ { a := Bool } ⟧
+def B := ⟦ₛ ∀ α <: A, μ β, { a := Bool, b := Bool → α → β } ⟧
+def C := ⟦ₛ ∀ α <: A, { a := Bool, b := Bool → α → A } ⟧
+
+@[simp] lemma A.is_closed : A.closed :=
+show A.free_range = 0, from rfl
+
+example : B <: C :=
+begin
+  suffices : ⟦ₛ bctx α <: A ⊢
+    (μ β, { a := Bool, b := Bool → α → β }) <:
+          { a := Bool, b := Bool → α → A } ⟧,
+    from sub.abs (sub.refl _ _) this,
+  suffices : ⟦ₛ bctx α <: A ⊢
+    { a := Bool, b := Bool → α → μ β, { a := Bool, b := Bool → α → β } } <:
+    { a := Bool, b := Bool → α → A } ⟧,
+    from sub.expₗ this,
+  record.fieldwise_eq,
+  show ⟦ₛ bctx α <: A ⊢
+    (Bool → α → μ β, { a := Bool, b := Bool → α → β }) <:
+    (Bool → α → A) ⟧,
+  { suffices : ⟦ₛ bctx α <: A ⊢ (μ β, { a := Bool, b := Bool → α → β }) <: A ⟧,
+      by simp at this; simp [sub.fun, sub.refl, this],
+    suffices : ⟦ₛ bctx α <: A ⊢ { a := Bool, b := Bool → α → (μ β, { a := Bool, b := Bool → α → β }) } <: A ⟧,
+      from sub.expₗ this,
+    simp [lift_closed],
+    record.fieldwise_eq,
+    show [A] ⊢ Bool <: Bool, from sub.refl _ _
+  },
+  show [A] ⊢ Bool <: Bool, from sub.refl _ _
+end
 end
 
 end system_f_sub
