@@ -321,7 +321,7 @@ end
 lemma lift_lift {k k' d d'} (a : type) : d ≤ d' → d' ≤ k + d → (a.lift k d).lift k' d' = a.lift (k + k') d :=
 begin
   intros, simp [type.lift,rename_rename,function.comp],
-  apply congr_fun, apply congr_arg, apply funext, intro i,
+  congr, apply funext, intro i,
   by_cases i ≥ d,
   { simp [ge, h, type.lift, lift_idx, le_trans ‹d' ≤ k + d› (add_le_add_left h _)] },
   { have : ¬d' ≤ i, from λ hcontr, h (le_trans ‹d ≤ d'› hcontr),
@@ -335,7 +335,7 @@ lift_lift _ dec_trivial dec_trivial
 lemma lift_lift2 (k k' d d') (a : type) : k + d ≤ d' → (a.lift k d).lift k' d' = (a.lift k' (d' - k)).lift k d :=
 begin
   intros, simp [type.lift,rename_rename,function.comp],
-  apply congr_fun, apply congr_arg, apply funext, intro i,
+  congr, apply funext, intro i,
   have : k ≤ d', from le_trans (nat.le_add_right _ _) ‹k + d ≤ d'›,
   by_cases i ≥ d,
   { by_cases d' ≤ k + i with h',
@@ -370,9 +370,7 @@ lemma nat.succ_le_iff_lt (n m : ℕ) : n.succ ≤ m ↔ n < m := ⟨nat.succ_le_
 lemma expand_lift (k d) (a : type) : (a.lift k (d+1)).expand = a.expand.lift k d :=
 begin
   intros, simp [type.expand,type.instantiate,type.lift,instantiate_idx,rename_rename,function.comp],
-  -- HACK
-  apply @congr_fun _ _ (type.subst _) (type.subst _),
-  apply congr_arg, apply funext, intro i,
+  congr, apply funext, intro i,
   simp [nat.not_lt_zero,ge,lift_idx,nat.succ_le_iff_lt],
   by_cases d < i,
   { have : 0 < i, from lt_of_le_of_lt (nat.zero_le _) ‹d < i›,
@@ -381,7 +379,7 @@ begin
   { simp [*],
     cases i with i,
     { simp [rename_up_comp_rename_up, nat.not_lt_zero],
-      apply congr_arg, apply congr_fun, apply congr_arg, apply funext, intro j,
+      congr, apply funext, intro j,
       cases j, --by_cases d ≤ j,
       { simp [rename.up,*] },
       { simp [rename.up,*, function.comp, if_distrib nat.succ, nat.add_one, nat.add_succ,
@@ -589,29 +587,19 @@ end
 lemma instantiate_record (b fs) : (record fs).instantiate b = record (fs.map (λ ⟨i, a⟩, ⟨i, a.instantiate b⟩)) :=
 begin
   simp [record, record_list],
-  apply congr_arg,
-  apply congr_fun,
-  { apply congr_arg,
-    apply congr,
-    { apply congr_arg,
-      apply funext, intro i,
-      induction fs,
-      { refl },
-      { simp [list.find], cases a,
-        simp,
-        by_cases idx = i,
-        { simp [function.comp, h, option.get_or_else, has_map.map, option.map, option.bind] },
-        { simp [function.comp, h], apply ih_1 },
-      }
-    },
-    { apply congr_arg,
-      apply congr_arg,
-      apply congr_fun, simp,
-      apply congr_fun,
-      apply congr_arg,
-      apply funext, intro a, cases a with idx ty,
-      simp }
-  }
+  congr,
+  { apply funext, intro i,
+    induction fs,
+    { refl },
+    { simp [list.find], cases a,
+      simp,
+      by_cases idx = i,
+      { simp [function.comp, h, option.get_or_else, has_map.map, option.map, option.bind] },
+      { simp [function.comp, h], apply ih_1 },
+    }
+  },
+  { apply funext, intro a, cases a with idx ty,
+    simp }
 end
 
 lemma record.sub {e} {fs fs' : list field} :
